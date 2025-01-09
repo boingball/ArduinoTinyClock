@@ -5,7 +5,7 @@
 
 A smart clock project built with ESP32 that features WiFi connectivity, real-time weather updates, and a web configuration interface.
 
-![IoT Clock](docs/images/clock.jpg)
+![IoT Clock](docs/images/clock.jpeg)
 
 ## ✨ Features
 
