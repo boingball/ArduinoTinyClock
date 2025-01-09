@@ -56,7 +56,7 @@ A smart clock project built with ESP32 that features WiFi connectivity, real-tim
 3. Install all required libraries through the Arduino Library Manager
 4. Clone this repository:
    ```bash
-   git clone https://github.com/boingball/ArduinoTinyClock/ArduinoTinyClock.git
+   [git clone https://github.com/boingball/ArduinoTinyClock/ArduinoTinyClock.git](https://github.com/boingball/ArduinoTinyClock.git)
    ```
 5. Open the project in Arduino IDE
 6. Upload the code to your ESP32
