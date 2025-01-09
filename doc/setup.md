@@ -79,6 +79,7 @@
 2. **Initial Configuration**
    * Power up ESP32 while holding green button
    * Connect to "ClockConfig" WiFi network
+   * Password is "password"
    * Open http://192.168.4.1
    * Enter your settings:
      * WiFi credentials
