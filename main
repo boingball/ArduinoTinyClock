@@ -1,37 +1,44 @@
-//boingball - Clock v0.2
-//Created in 2021
+//boingball - Clock v0.3
+//Created in 2025
 //Add WIFI
 //Add Internet Clock
+//Add DST
+//Add Config Page
 
 // Includes
 #include <Arduino.h>
 #include <TM1637TinyDisplay6.h>       // Include 6-Digit Display Class Header
 #include <WiFi.h> // WIFI Support
-#include <HTTPClient.h> // HTTP Client
+#include <HTTPClient.h> // ESP32 HTTP Client
 #include <Arduino_JSON.h> // JSON Lib
 #include "time.h" // Time Support
 #include <Bounce2.h> // BounceButton to support Button Pressing
 #include <Chrono.h> // Chrono Lib - to support a StopWatch Function
+#include <WebServer.h>
+#include <SPIFFS.h>
+#include <FS.h> 
 
 //Setup Buttons in Bounce
 Bounce b = Bounce(); // Instantiate a Bounce object for the BlueButton
 Bounce r = Bounce(); // Instantiate a Bounce object for the RedButton
 Bounce g = Bounce(); // Instantiate a Bounce object for the GreenButton
 
-// WiFi network name and password:
-// Hard Coded :(
-const char * networkName = "*networkname*";
-const char * networkPswd = "*networkpassword";
+//Setup Strings for Settings - WiFi network name and password
+// Open WeatherMapAPIKey
+// Local latitude and Longitude
+String networkName;
+String networkPswd;
+String openWeatherMapApiKey;
+String latitude;
+String longitude;
 
 // Internet Time Settings
 const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 3600 * 1;
-const int   daylightOffset_sec = 3600 * 0;
 String todayDate = "";
 
-// Weather Report - Using openWeatherMap.org API - Enter API Key below
-String openWeatherMapApiKey = "OpenWetherAPIKey";
-// https://api.openweathermap.org/data/2.5/weather?lat=x.x&lon=-x.x&appid=xxxxxxxxxxxxxxxxxxx
+//WIFISetup
+WebServer server(80);
+bool configMode = false;
 String jsonBuffer;
 
 // Define Digital Pins for Clock
@@ -44,21 +51,245 @@ Chrono StopWatch;
 //Display Setup
 TM1637TinyDisplay6 display(CLK, DIO); // 6-Digit Display Class
 
-void setup()
-{
-  //Serial Dubug output
-  Serial.begin(115200);
-  display.begin();
-  display.showString("*Tiny*");
-  delay(1000);
-  display.showString("clock");
-  delay(1000);
-  //Connect to the WiFi network (see function below loop)
-  connectToWiFi(networkName, networkPswd);
-  display.showString("WIFI..");
-  // We configure the NTP server
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+void connectToWiFi(String ssid, String pwd) {
+  display.showString("WIFI");
+  WiFi.begin(ssid.c_str(), pwd.c_str());
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    display.showString("Connecting...");
+    delay(500);
+  }
+  
+  display.showString("connected!");
+  Serial.println(WiFi.localIP());
+}
 
+void requestURL(const char * host, uint8_t port)
+{
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+  if (!client.connect(host, port))
+  {
+    display.showString("failed");
+    return;
+  }
+  Serial.println("Connected!");
+
+  // This will send the request to the server
+  client.print((String)"GET / HTTP/1.1\r\n" +
+               "Host: " + String(host) + "\r\n" +
+               "Connection: close\r\n\r\n");
+  unsigned long timeout = millis();
+  while (client.available() == 0) 
+  {
+    if (millis() - timeout > 5000) 
+    {
+      display.showString("Timeout");
+      client.stop();
+      return;
+    }
+  }
+
+  // Read all the lines of the reply from server and print them to Serial
+  while (client.available()) 
+  {
+    String line = client.readStringUntil('\r');
+    Serial.print(line);
+   //display.showString(line.toString());
+  }
+
+  display.showString("closing");
+  client.stop();
+}
+
+bool isDST(tm timeinfo) {
+    // UK DST Rules: Starts last Sunday of March, Ends last Sunday of October
+    int month = timeinfo.tm_mon + 1; // tm_mon is 0-11
+    int day = timeinfo.tm_mday;
+    int weekday = timeinfo.tm_wday; // 0 = Sunday
+    
+    if (month < 3 || month > 10) {
+        return false;
+    }
+    if (month > 3 && month < 10) {
+        return true;
+    }
+    
+    // Find last Sunday of the month
+    int lastSunday = 31 - ((weekday + 31 - day) % 7);
+    
+    if (month == 3) {
+        return day >= lastSunday;
+    } else if (month == 10) {
+        return day < lastSunday;
+    }
+    
+    return false;
+}
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    display.showString("Sync.");
+    return;
+  }
+  //Lets hold the Time here and display it
+  char timeStringBuff[50]; //50 chars should be enough
+  strftime(timeStringBuff, sizeof(timeStringBuff), "%H%M%S", &timeinfo);
+  display.showString(timeStringBuff,6,0,0b01010000);
+}
+
+String httpGETRequest(const char* serverName) {
+  HTTPClient http;
+  WiFiClient client;
+  
+  http.begin(client, serverName);
+  int httpResponseCode = http.GET();
+  String payload = "{}"; 
+  
+  if (httpResponseCode > 0) {
+    payload = http.getString();
+  }
+  
+  http.end();
+  return payload;
+}
+
+void handleRoot() {
+  String html = R"(
+    <html>
+    <head>
+      <meta name='viewport' content='width=device-width, initial-scale=1'>
+      <style>
+        body { font-family: Arial; max-width: 400px; margin: 0 auto; padding: 20px; }
+        h1 { color: #2c3e50; text-align: center; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; color: #34495e; }
+        input { width: 100%; padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px; }
+        .btn { background: #3498db; color: white; padding: 10px; border: none; width: 100%; border-radius: 4px; cursor: pointer; }
+        .btn:hover { background: #2980b9; }
+      </style>
+    </head>
+    <body>
+      <h1>Clock Config</h1>
+      <form action='/save' method='POST' onsubmit='return validateForm()'>
+        <div class='form-group'>
+          <label>WiFi Name:</label>
+          <input type='text' name='ssid' required>
+        </div>
+        <div class='form-group'>
+          <label>WiFi Password:</label>
+          <input type='password' name='password' required>
+        </div>
+        <div class='form-group'>
+          <label>OpenWeather API Key:</label>
+          <input type='text' name='apikey' required pattern='.{32}' title='API key must be 32 characters'>
+        </div>
+        <div class='form-group'>
+          <label>Latitude:</label>
+          <input type='number' name='lat' step='any' required min='-90' max='90'>
+        </div>
+        <div class='form-group'>
+          <label>Longitude:</label>
+          <input type='number' name='lon' step='any' required min='-180' max='180'>
+        </div>
+        <button type='submit' class='btn'>Save Configuration</button>
+      </form>
+      <script>
+        function validateForm() {
+          var inputs = document.getElementsByTagName('input');
+          for(var i = 0; i < inputs.length; i++) {
+            if(!inputs[i].value.trim()) {
+              alert('All fields must be filled out');
+              return false;
+            }
+          }
+          return true;
+        }
+      </script>
+    </body>
+    </html>
+  )";
+  server.send(200, "text/html", html);
+}
+
+void handleSave() {
+  if (server.method() != HTTP_POST) {
+    server.send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+
+  String ssid = server.arg("ssid");
+  String password = server.arg("password");
+  String apikey = server.arg("apikey");
+  String lat = server.arg("lat");
+  String lon = server.arg("lon");
+
+  // Validation
+  if (ssid.length() < 1 || password.length() < 8 || 
+      apikey.length() != 32 || lat.length() < 1 || lon.length() < 1) {
+    server.send(400, "text/plain", "Invalid input. Please check all fields.");
+    return;
+  }
+
+  float latNum = lat.toFloat();
+  float lonNum = lon.toFloat();
+  if (latNum < -90 || latNum > 90 || lonNum < -180 || lonNum > 180) {
+    server.send(400, "text/plain", "Invalid coordinates");
+    return;
+  }
+
+  fs::File configFile = SPIFFS.open("/config.txt", "w");
+  if (!configFile) {
+    server.send(500, "text/html", "<html><body>Failed to open config file</body></html>");
+    return;
+  }
+
+  configFile.println(ssid);
+  configFile.println(password);
+  configFile.println(apikey);
+  configFile.println(lat);
+  configFile.println(lon);
+  configFile.close();
+
+  server.send(200, "text/html", 
+    "<html><body>"
+    "<h1>Settings saved successfully!</h1>"
+    "<p>The device will reboot in 2 seconds...</p>"
+    "<script>setTimeout(function(){ window.close(); }, 2000);</script>"
+    "</body></html>");
+  delay(2000);
+  ESP.restart();
+}
+
+void loadConfig() {
+   if(!SPIFFS.exists("/config.txt")) {
+    Serial.println("No config file found");
+    display.showString("NO CFG");
+    delay(1000);
+    return;
+    }
+    fs::File configFile = SPIFFS.open("/config.txt", "r");
+    networkName = configFile.readStringUntil('\n');
+    networkPswd = configFile.readStringUntil('\n');
+    openWeatherMapApiKey = configFile.readStringUntil('\n');
+    latitude = configFile.readStringUntil('\n');
+    longitude = configFile.readStringUntil('\n');
+    
+    // Trim whitespace
+    networkName.trim();
+    networkPswd.trim();
+    openWeatherMapApiKey.trim();
+    latitude.trim();
+    longitude.trim();
+    configFile.close();
+ }
+
+ void setup()
+{
   //Added Button Support
   b.attach(23,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode
   b.interval(25); // Use a debounce interval of 25 milliseconds
@@ -66,6 +297,45 @@ void setup()
   r.interval(25); // Use a debounce interval of 25 milliseconds
   g.attach(19,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode
   g.interval(25); // Use a debounce interval of 25 milliseconds
+  //Serial Dubug output
+  Serial.begin(115200);
+  display.begin();
+  display.showString("*Tiny*");
+  delay(1000);
+  display.showString("clock");
+  delay(1000);
+  if(!SPIFFS.begin(true)) {
+  Serial.println("SPIFFS Mount Failed");
+  return;
+  }
+  loadConfig();
+
+  if (g.read() == LOW) { // If green button held during boot
+  configMode = true;
+  WiFi.softAP("ClockConfig", "password");
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.begin();
+  display.showString("CONFIG");
+  } else if(networkName.length() > 0) {
+    //Connect to the WiFi network (see function below loop)
+    connectToWiFi(networkName, networkPswd);
+    display.showString("WIFI..");
+  }
+
+  // We configure the NTP server
+  configTime(0, 0, ntpServer); // Set GMT offset to 0
+  // Initial time sync
+    struct tm timeinfo;
+    if(getLocalTime(&timeinfo)) {
+        // Check if we're in DST and adjust accordingly
+        if(isDST(timeinfo)) {
+            setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0/2", 1); // UK timezone with automatic DST
+        } else {
+            setenv("TZ", "GMT0", 1); // UK timezone without DST
+        }
+        tzset();
+    }
 }
 
 void loop() {
@@ -75,7 +345,10 @@ void loop() {
   b.update();
   r.update();
   g.update();
-  
+ if (configMode) {
+  server.handleClient();
+  return;
+} 
  if (b.fell()) {
         // Blue Button - Stop Watch
         Serial.print("Blue Button Pressed");
@@ -125,7 +398,7 @@ void loop() {
     if (r.fell()) {
         // Red Button
         Serial.print("Red Button Pressed");
-        String serverPath = "http://api.openweathermap.org/data/2.5/weather?lat=54.95&lon=-1.603&units=metric&appid="  + openWeatherMapApiKey;
+        String serverPath = "http://api.openweathermap.org/data/2.5/weather?lat=" + latitude + "&lon=" + longitude + "&units=metric&appid=" + openWeatherMapApiKey;
         jsonBuffer = httpGETRequest(serverPath.c_str());
         Serial.println(jsonBuffer);
         JSONVar myObject = JSON.parse(jsonBuffer);
@@ -149,15 +422,13 @@ void loop() {
       display.clear();
       display.showString("\xB0", 1, 3);
       display.showNumber(temp, false, 3, 0);
-
-
-          do{
+      do{
           //Wait for Button Press
            r.update();
             if (g.fell()) {
               display.clear();
               int wind = myObject["main"]["wind"];
-              display.showNumber(wind, false 3, 0);
+              display.showNumber(wind, false, 3, 0);
               }
           } while (!r.fell());
           }
@@ -168,101 +439,4 @@ void loop() {
       }
    
  printLocalTime();
-}
-
-void connectToWiFi(const char * ssid, const char * pwd)
-{
-  display.showString("WIFI");
-
-  WiFi.begin(ssid, pwd);
-
-  while (WiFi.status() != WL_CONNECTED) 
-  {
-    // Blink LED while we're connecting:
-    display.showString("Connecting...");
-    delay(500);
-  }
-
-  display.showString("connected!");
-  Serial.println(WiFi.localIP());
-}
-
-void requestURL(const char * host, uint8_t port)
-{
-
-  // Use WiFiClient class to create TCP connections
-  WiFiClient client;
-  if (!client.connect(host, port))
-  {
-    display.showString("failed");
-    return;
-  }
-  Serial.println("Connected!");
-
-  // This will send the request to the server
-  client.print((String)"GET / HTTP/1.1\r\n" +
-               "Host: " + String(host) + "\r\n" +
-               "Connection: close\r\n\r\n");
-  unsigned long timeout = millis();
-  while (client.available() == 0) 
-  {
-    if (millis() - timeout > 5000) 
-    {
-      display.showString("Timeout");
-      client.stop();
-      return;
-    }
-  }
-
-  // Read all the lines of the reply from server and print them to Serial
-  while (client.available()) 
-  {
-    String line = client.readStringUntil('\r');
-    Serial.print(line);
-   //display.showString(line.toString());
-  }
-
-  display.showString("closing");
-  client.stop();
-}
-
-void printLocalTime()
-{
-  struct tm timeinfo;
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
-    display.showString("Sync.");
-    return;
-  }
-  //Lets hold the Time here and display it
-  char timeStringBuff[50]; //50 chars should be enough
-  strftime(timeStringBuff, sizeof(timeStringBuff), "%H%M%S", &timeinfo);
-  display.showString(timeStringBuff,6,0,0b01010000);
-}
-
-String httpGETRequest(const char* serverName) {
-  WiFiClient client;
-  HTTPClient http;
-    
-  // Your Domain name with URL path or IP address with path
-  http.begin(client, serverName);
-  
-  // Send HTTP POST request
-  int httpResponseCode = http.GET();
-  
-  String payload = "{}"; 
-  
-  if (httpResponseCode>0) {
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-    payload = http.getString();
-  }
-  else {
-    Serial.print("Error code: ");
-    Serial.println(httpResponseCode);
-  }
-  // Free resources
-  http.end();
-
-  return payload;
 }
