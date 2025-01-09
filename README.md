@@ -133,6 +133,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📱 Contact
 
-Your Name - [@yourtwitter](https://twitter.com/yourtwitter) - email@example.com
+Your Name Darren Banfi - [@boingball](https://x.com/boingball)
 
-Project Link: [https://github.com/yourusername/esp32-iot-clock](https://github.com/yourusername/esp32-iot-clock)
+Project Link: [https://github.com/boingball/ArduinoTinyClock](https://github.com/boingball/ArduinoTinyClock)
