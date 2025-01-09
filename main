@@ -1,0 +1,268 @@
+//boingball - Clock v0.2
+//Created in 2021
+//Add WIFI
+//Add Internet Clock
+
+// Includes
+#include <Arduino.h>
+#include <TM1637TinyDisplay6.h>       // Include 6-Digit Display Class Header
+#include <WiFi.h> // WIFI Support
+#include <HTTPClient.h> // HTTP Client
+#include <Arduino_JSON.h> // JSON Lib
+#include "time.h" // Time Support
+#include <Bounce2.h> // BounceButton to support Button Pressing
+#include <Chrono.h> // Chrono Lib - to support a StopWatch Function
+
+//Setup Buttons in Bounce
+Bounce b = Bounce(); // Instantiate a Bounce object for the BlueButton
+Bounce r = Bounce(); // Instantiate a Bounce object for the RedButton
+Bounce g = Bounce(); // Instantiate a Bounce object for the GreenButton
+
+// WiFi network name and password:
+// Hard Coded :(
+const char * networkName = "*networkname*";
+const char * networkPswd = "*networkpassword";
+
+// Internet Time Settings
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 3600 * 1;
+const int   daylightOffset_sec = 3600 * 0;
+String todayDate = "";
+
+// Weather Report - Using openWeatherMap.org API - Enter API Key below
+String openWeatherMapApiKey = "OpenWetherAPIKey";
+// https://api.openweathermap.org/data/2.5/weather?lat=x.x&lon=-x.x&appid=xxxxxxxxxxxxxxxxxxx
+String jsonBuffer;
+
+// Define Digital Pins for Clock
+#define CLK 15
+#define DIO 2
+
+//Start the StopWatch Service
+Chrono StopWatch; 
+
+//Display Setup
+TM1637TinyDisplay6 display(CLK, DIO); // 6-Digit Display Class
+
+void setup()
+{
+  //Serial Dubug output
+  Serial.begin(115200);
+  display.begin();
+  display.showString("*Tiny*");
+  delay(1000);
+  display.showString("clock");
+  delay(1000);
+  //Connect to the WiFi network (see function below loop)
+  connectToWiFi(networkName, networkPswd);
+  display.showString("WIFI..");
+  // We configure the NTP server
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  //Added Button Support
+  b.attach(23,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode
+  b.interval(25); // Use a debounce interval of 25 milliseconds
+  r.attach(21,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode
+  r.interval(25); // Use a debounce interval of 25 milliseconds
+  g.attach(19,INPUT_PULLUP); // Attach the debouncer to a pin with INPUT_PULLUP mode
+  g.interval(25); // Use a debounce interval of 25 milliseconds
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  
+  //Button Check - Update Button Status
+  b.update();
+  r.update();
+  g.update();
+  
+ if (b.fell()) {
+        // Blue Button - Stop Watch
+        Serial.print("Blue Button Pressed");
+        display.showString("Stopwatch");
+        do{
+        //Check for Button Update
+        b.update();
+        display.showString("Start");  
+        } while (!b.fell());
+        StopWatch.restart();
+        int stopWatchDisp = 0;
+        do{
+        //Check for Button Update
+        b.update();
+        if (StopWatch.hasPassed(100) ){
+          stopWatchDisp = stopWatchDisp + 1;
+          StopWatch.restart();
+          display.showNumberDec(stopWatchDisp, 0b00100000, false, 4, 1);
+        }
+        } while (!b.fell());    
+         do{
+          //Wait for Button Press
+           b.update();
+          } while (!b.fell());
+         } else {
+        // Stop doing what your doing
+        }
+
+
+    if (g.fell()) {
+        // Green Button - Location Update
+        Serial.print("Green Button Pressed");
+          //Lets get todays date as well and store it in the Global Var
+          struct tm timeinfo;
+          getLocalTime(&timeinfo);
+          char timeDateBuff[50]; //50 chars for the date
+          strftime(timeDateBuff, sizeof(timeDateBuff), "%d%m%y", &timeinfo);
+          todayDate = timeDateBuff; 
+          display.showString(timeDateBuff,6,0,0b01010000);
+        do{
+          //Wait for Button Press
+           g.update();
+          } while (!g.fell());
+      } else {
+        // Stop doing what your doing
+      }
+    if (r.fell()) {
+        // Red Button
+        Serial.print("Red Button Pressed");
+        String serverPath = "http://api.openweathermap.org/data/2.5/weather?lat=54.95&lon=-1.603&units=metric&appid="  + openWeatherMapApiKey;
+        jsonBuffer = httpGETRequest(serverPath.c_str());
+        Serial.println(jsonBuffer);
+        JSONVar myObject = JSON.parse(jsonBuffer);
+
+          // JSON.typeof(jsonVar) can be used to get the type of the var
+          if (JSON.typeof(myObject) == "undefined") {
+          display.showString("Cannot Get Weather");
+          Serial.println("Parsing input failed!");
+          } else {
+             Serial.print("JSON object = ");
+      Serial.println(myObject);
+      Serial.print("Temperature: ");
+      Serial.println(myObject["main"]["temp"]);
+      Serial.print("Pressure: ");
+      Serial.println(myObject["main"]["pressure"]);
+      Serial.print("Humidity: ");
+      Serial.println(myObject["main"]["humidity"]);
+      Serial.print("Wind Speed: ");
+      Serial.println(myObject["wind"]["speed"]);
+      int temp = myObject["main"]["temp"];
+      display.clear();
+      display.showString("\xB0", 1, 3);
+      display.showNumber(temp, false, 3, 0);
+
+
+          do{
+          //Wait for Button Press
+           r.update();
+            if (g.fell()) {
+              display.clear();
+              int wind = myObject["main"]["wind"];
+              display.showNumber(wind, false 3, 0);
+              }
+          } while (!r.fell());
+          }
+     
+        
+      } else {
+        // Stop doing what your doing
+      }
+   
+ printLocalTime();
+}
+
+void connectToWiFi(const char * ssid, const char * pwd)
+{
+  display.showString("WIFI");
+
+  WiFi.begin(ssid, pwd);
+
+  while (WiFi.status() != WL_CONNECTED) 
+  {
+    // Blink LED while we're connecting:
+    display.showString("Connecting...");
+    delay(500);
+  }
+
+  display.showString("connected!");
+  Serial.println(WiFi.localIP());
+}
+
+void requestURL(const char * host, uint8_t port)
+{
+
+  // Use WiFiClient class to create TCP connections
+  WiFiClient client;
+  if (!client.connect(host, port))
+  {
+    display.showString("failed");
+    return;
+  }
+  Serial.println("Connected!");
+
+  // This will send the request to the server
+  client.print((String)"GET / HTTP/1.1\r\n" +
+               "Host: " + String(host) + "\r\n" +
+               "Connection: close\r\n\r\n");
+  unsigned long timeout = millis();
+  while (client.available() == 0) 
+  {
+    if (millis() - timeout > 5000) 
+    {
+      display.showString("Timeout");
+      client.stop();
+      return;
+    }
+  }
+
+  // Read all the lines of the reply from server and print them to Serial
+  while (client.available()) 
+  {
+    String line = client.readStringUntil('\r');
+    Serial.print(line);
+   //display.showString(line.toString());
+  }
+
+  display.showString("closing");
+  client.stop();
+}
+
+void printLocalTime()
+{
+  struct tm timeinfo;
+  if(!getLocalTime(&timeinfo)){
+    Serial.println("Failed to obtain time");
+    display.showString("Sync.");
+    return;
+  }
+  //Lets hold the Time here and display it
+  char timeStringBuff[50]; //50 chars should be enough
+  strftime(timeStringBuff, sizeof(timeStringBuff), "%H%M%S", &timeinfo);
+  display.showString(timeStringBuff,6,0,0b01010000);
+}
+
+String httpGETRequest(const char* serverName) {
+  WiFiClient client;
+  HTTPClient http;
+    
+  // Your Domain name with URL path or IP address with path
+  http.begin(client, serverName);
+  
+  // Send HTTP POST request
+  int httpResponseCode = http.GET();
+  
+  String payload = "{}"; 
+  
+  if (httpResponseCode>0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    payload = http.getString();
+  }
+  else {
+    Serial.print("Error code: ");
+    Serial.println(httpResponseCode);
+  }
+  // Free resources
+  http.end();
+
+  return payload;
+}
